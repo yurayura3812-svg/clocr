@@ -1,5 +1,5 @@
 streamlit
-opencv-python-headless==4.8.1.78
-numpy
-mediapipe
+opencv-python-headless
+numpy<2.0
+mediapipe==0.10.9
 matplotlib
