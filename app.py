@@ -154,16 +154,25 @@ def main():
         if p1 >= 60 and p1 <= 80 and p2 >= 15 and extracted_colors[2]['percentage'] >= 3:
             st.write("・このままのバランスを維持しましょう！")
 
-        st.image(img_rgb, caption="元画像", use_container_width=True)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.image(img_rgb, caption="元画像", use_container_width=True)
+        with col2:
+            fig, ax = plt.subplots(figsize=(5, 5))
+            colors_hex = [f'#{c["rgb"][0]:02x}{c["rgb"][1]:02x}{c["rgb"][2]:02x}' for c in extracted_colors if c['percentage'] > 0]
+            sizes = [c['percentage'] for c in extracted_colors if c['percentage'] > 0]
+            labels_pie = [f"{c['percentage']:.1f}%" for c in extracted_colors if c['percentage'] > 0]
+            ax.pie(sizes, labels=labels_pie, colors=colors_hex, startangle=90, counterclock=False,
+                   wedgeprops={'width': 0.4, 'edgecolor': 'white'})
+            ax.set_title(f"Color Balance (Score: {score})")
+            st.pyplot(fig)
 
-        fig, ax = plt.subplots(figsize=(5, 5))
         colors_hex = [f'#{c["rgb"][0]:02x}{c["rgb"][1]:02x}{c["rgb"][2]:02x}' for c in extracted_colors if c['percentage'] > 0]
         sizes = [c['percentage'] for c in extracted_colors if c['percentage'] > 0]
         labels_pie = [f"{c['percentage']:.1f}%" for c in extracted_colors if c['percentage'] > 0]
         ax.pie(sizes, labels=labels_pie, colors=colors_hex, startangle=90, counterclock=False,
                wedgeprops={'width': 0.4, 'edgecolor': 'white'})
         ax.set_title(f"Color Balance (Score: {score})")
-        st.pyplot(fig)
 
 if __name__ == "__main__":
     main()
