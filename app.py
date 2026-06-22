@@ -1,3 +1,4 @@
+from supabase import create_client
 import streamlit as st
 import cv2
 import numpy as np
@@ -5,6 +6,7 @@ import matplotlib.pyplot as plt
 import mediapipe as mp
 import urllib.request
 import os
+import uuid
 
 def download_model():
     model_path = "selfie_segmenter.tflite"
@@ -14,6 +16,10 @@ def download_model():
             model_path
         )
     return model_path
+def get_supabase():
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
 
 def rgb_to_color_name(rgb):
     r, g, b = int(rgb[0]), int(rgb[1]), int(rgb[2])
@@ -188,6 +194,33 @@ def main():
                    wedgeprops={'width': 0.4, 'edgecolor': 'white'})
             ax.set_title(f"Color Balance (Score: {score})")
             st.pyplot(fig)
+
+        st.divider()
+        st.subheader("👗 この服をストックに追加")
+        category = st.selectbox("カテゴリ", ["トップス", "ボトムス", "アウター", "ワンピース", "その他"])
+        season = st.multiselect("季節", ["春", "夏", "秋", "冬"])
+        
+        if st.button("ストックに保存"):
+            supabase = get_supabase()
+            
+            # 画像をSupabase Storageにアップロード
+            img_bytes = cv2.imencode('.jpg', cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR))[1].tobytes()
+            file_name = f"{uuid.uuid4()}.jpg"
+            supabase.storage.from_("wardrobe-images").upload(file_name, img_bytes, {"content-type": "image/jpeg"})
+            image_url = supabase.storage.from_("wardrobe-images").get_public_url(file_name)
+            
+            # DBに保存
+            supabase.table("wardrobe").insert({
+                "category": category,
+                "color_main": extracted_colors[0]['name'],
+                "color_sub": extracted_colors[1]['name'],
+                "color_accent": extracted_colors[2]['name'],
+                "score": score,
+                "season": ",".join(season),
+                "image_url": image_url,
+            }).execute()
+            
+            st.success("ストックに保存しました！")
 
 if __name__ == "__main__":
     main()
