@@ -6,6 +6,7 @@ import mediapipe as mp
 import urllib.request
 import os
 import uuid
+import io
 
 def download_model():
     model_path = "selfie_segmenter.tflite"
@@ -132,12 +133,25 @@ def analyze(img_rgb, model_path):
         'bbox': (xmin, ymin, xmax, ymax)
     }
 
+def render_pie_chart(valid_colors, score):
+    fig, ax = plt.subplots(figsize=(5, 5))
+    sizes = [c['percentage'] for c in valid_colors]
+    hex_colors = [f'#{int(c["rgb"][0]):02x}{int(c["rgb"][1]):02x}{int(c["rgb"][2]):02x}' for c in valid_colors]
+    labels_pie = [f"{c['percentage']:.1f}%" for c in valid_colors]
+    ax.pie(sizes, labels=labels_pie, colors=hex_colors, startangle=90, counterclock=False,
+           wedgeprops={'width': 0.4, 'edgecolor': 'white'})
+    ax.set_title(f"Color Balance (Score: {score})")
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight')
+    plt.close()
+    buf.seek(0)
+    return buf.read()
+
 def page_diagnosis():
     st.title("👗 コーデ色バランス診断")
     st.markdown("服装の写真をアップロードして、70:25:5の黄金比カラーバランスを診断します。")
 
     model_path = download_model()
-
     uploaded = st.file_uploader("全身コーデの写真をアップロード", type=["jpg", "jpeg", "png"])
 
     if uploaded:
@@ -150,6 +164,7 @@ def page_diagnosis():
 
         score = result['score']
         colors = result['extracted_colors']
+        valid_colors = [c for c in colors if c['percentage'] > 0.5]
 
         st.subheader(f"スコア: {score} / 100")
         if score >= 80:
@@ -162,12 +177,11 @@ def page_diagnosis():
         st.image(result['img_rgb'], caption="アップロード画像", use_container_width=True)
 
         st.subheader("カラー分析結果")
-        valid_colors = [c for c in colors if c['percentage'] > 0.5]
         for i, c in enumerate(valid_colors[:5]):
             rgb = c['rgb']
             hex_color = f'#{int(rgb[0]):02x}{int(rgb[1]):02x}{int(rgb[2]):02x}'
             color_name = rgb_to_color_name(rgb)
-            role = ["ベース (目標70%)","アソート (目標25%)","アクセント (目標5%)"][i] if i < 3 else f"その他{i-2}"
+            role = ["ベース (目標70%)", "アソート (目標25%)", "アクセント (目標5%)"][i] if i < 3 else f"その他{i-2}"
             st.markdown(
                 f'<div style="display:flex;align-items:center;gap:10px;margin:4px 0">'
                 f'<div style="width:40px;height:40px;background:{hex_color};border-radius:6px;border:1px solid #ccc"></div>'
@@ -176,15 +190,8 @@ def page_diagnosis():
                 unsafe_allow_html=True
             )
 
-        fig, ax = plt.subplots(figsize=(5, 5))
-        sizes = [c['percentage'] for c in valid_colors]
-        hex_colors = [f'#{int(c["rgb"][0]):02x}{int(c["rgb"][1]):02x}{int(c["rgb"][2]):02x}' for c in valid_colors]
-        labels_pie = [f"{c['percentage']:.1f}%" for c in valid_colors]
-        ax.pie(sizes, labels=labels_pie, colors=hex_colors, startangle=90, counterclock=False,
-               wedgeprops={'width': 0.4, 'edgecolor': 'white'})
-        ax.set_title(f"Color Balance (Score: {score})")
-        st.pyplot(fig)
-        plt.close()
+        graph_bytes = render_pie_chart(valid_colors, score)
+        st.image(graph_bytes)
 
         st.divider()
         st.subheader("今日のコーデを記録する")
@@ -204,18 +211,19 @@ def page_diagnosis():
             else:
                 try:
                     img_bytes = cv2.imencode('.jpg', cv2.cvtColor(result['img_rgb'], cv2.COLOR_RGB2BGR))[1].tobytes()
-                    file_name = f"{uuid.uuid4()}.jpg"
-                    supabase.storage.from_("wardrobe-images").upload(
-                        file_name, img_bytes, {"content-type": "image/jpeg"}
-                    )
-                    image_url = supabase.storage.from_("wardrobe-images").get_public_url(file_name)
+                    img_name = f"{uuid.uuid4()}.jpg"
+                    supabase.storage.from_("wardrobe-images").upload(img_name, img_bytes, {"content-type": "image/jpeg"})
+                    image_url = supabase.storage.from_("wardrobe-images").get_public_url(img_name)
 
-                    top3 = valid_colors[:3]
+                    graph_name = f"graph_{uuid.uuid4()}.png"
+                    supabase.storage.from_("wardrobe-images").upload(graph_name, graph_bytes, {"content-type": "image/png"})
+                    graph_url = supabase.storage.from_("wardrobe-images").get_public_url(graph_name)
+
                     color_data = [
                         {"rgb": [int(c['rgb'][0]), int(c['rgb'][1]), int(c['rgb'][2])],
                          "name": rgb_to_color_name(c['rgb']),
                          "percentage": round(c['percentage'], 1)}
-                        for c in top3
+                        for c in valid_colors[:3]
                     ]
 
                     supabase.table("outfit_log").insert({
@@ -224,6 +232,7 @@ def page_diagnosis():
                         "score": score,
                         "colors": color_data,
                         "image_url": image_url,
+                        "graph_url": graph_url,
                         "memo": memo
                     }).execute()
 
@@ -236,7 +245,6 @@ def page_clothes_register():
     st.markdown("服単体の写真をアップロードして登録します。")
 
     model_path = download_model()
-
     uploaded = st.file_uploader("服の写真をアップロード", type=["jpg", "jpeg", "png"])
 
     if uploaded:
@@ -280,9 +288,7 @@ def page_clothes_register():
                 try:
                     img_bytes = cv2.imencode('.jpg', cv2.cvtColor(result['img_rgb'], cv2.COLOR_RGB2BGR))[1].tobytes()
                     file_name = f"{uuid.uuid4()}.jpg"
-                    supabase.storage.from_("wardrobe-images").upload(
-                        file_name, img_bytes, {"content-type": "image/jpeg"}
-                    )
+                    supabase.storage.from_("wardrobe-images").upload(file_name, img_bytes, {"content-type": "image/jpeg"})
                     image_url = supabase.storage.from_("wardrobe-images").get_public_url(file_name)
 
                     color_data = [
@@ -313,6 +319,35 @@ def page_clothes_list():
     if supabase is None:
         st.error("Supabase未設定です。")
         return
+
+    try:
+        all_res = supabase.table("clothes").select("type,color_name,season").execute()
+        all_records = all_res.data
+        if all_records:
+            st.subheader("💡 ワードローブアドバイス")
+            types_owned = [r['type'] for r in all_records]
+            type_counts = {t: types_owned.count(t) for t in set(types_owned)}
+            all_types = ["トップス", "ボトムス", "アウター", "シューズ", "バッグ"]
+            missing = [t for t in all_types if t not in type_counts]
+            if missing:
+                st.warning(f"まだ登録されていない種類: **{'、'.join(missing)}**")
+
+            colors_owned = [r['color_name'] for r in all_records if r.get('color_name')]
+            achromatic = ["ブラック", "ホワイト", "グレー", "ベージュ"]
+            chromatic = [c for c in colors_owned if c not in achromatic]
+            achromatic_owned = [c for c in colors_owned if c in achromatic]
+
+            if not achromatic_owned:
+                st.info("ベースカラー（ブラック・ホワイト・グレー・ベージュ）が少ないです。コーデの軸になる無彩色を追加するとバランスが上がります。")
+            if len(set(chromatic)) >= 4:
+                st.warning(f"カラフルな服が多め（{len(set(chromatic))}色）。アクセントカラーは1〜2色に絞るとまとまりが出ます。")
+            elif len(chromatic) == 0:
+                st.info("カラーアイテムがありません。差し色を1〜2点加えるとコーデに表情が出ます。")
+            else:
+                st.success(f"カラーバランスは良好です。（無彩色 {len(achromatic_owned)}点 / 有彩色 {len(chromatic)}点）")
+            st.divider()
+    except Exception:
+        pass
 
     type_filter = st.selectbox("種類で絞り込み", ["すべて", "トップス", "ボトムス", "アウター", "シューズ", "バッグ", "その他"])
 
@@ -349,6 +384,39 @@ def page_clothes_list():
             if rec.get('memo'):
                 st.caption(rec['memo'])
 
+            with st.expander("編集"):
+                type_opts = ["トップス", "ボトムス", "アウター", "シューズ", "バッグ", "その他"]
+                new_type = st.selectbox("種類", type_opts,
+                                        index=type_opts.index(rec.get('type', 'トップス')) if rec.get('type') in type_opts else 0,
+                                        key=f"type_{rec['id']}")
+                new_brand = st.text_input("ブランド", value=rec.get('brand') or "", key=f"brand_{rec['id']}")
+                season_opts = ["春", "夏", "秋", "冬"]
+                new_season = st.multiselect("季節", season_opts, default=[s for s in (rec.get('season') or []) if s in season_opts], key=f"season_{rec['id']}")
+                new_memo = st.text_input("メモ", value=rec.get('memo') or "", key=f"memo_{rec['id']}")
+
+                col_save, col_del = st.columns(2)
+                with col_save:
+                    if st.button("保存", key=f"save_{rec['id']}"):
+                        try:
+                            supabase.table("clothes").update({
+                                "type": new_type,
+                                "brand": new_brand or None,
+                                "season": new_season,
+                                "memo": new_memo or None
+                            }).eq("id", rec['id']).execute()
+                            st.success("更新しました")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"更新エラー: {e}")
+                with col_del:
+                    if st.button("削除", key=f"del_{rec['id']}", type="secondary"):
+                        try:
+                            supabase.table("clothes").delete().eq("id", rec['id']).execute()
+                            st.success("削除しました")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"削除エラー: {e}")
+
 def page_history():
     st.title("📋 コーデ履歴")
     supabase = get_supabase()
@@ -372,6 +440,8 @@ def page_history():
             with col1:
                 if rec.get("image_url"):
                     st.image(rec["image_url"], use_container_width=True)
+                if rec.get("graph_url"):
+                    st.image(rec["graph_url"], use_container_width=True)
             with col2:
                 st.markdown(f"**スコア: {rec.get('score', '-')} / 100**")
                 st.markdown(f"カテゴリ: {rec.get('category', '-')}")
@@ -388,7 +458,7 @@ def page_history():
                         f'<span>{c["name"]} {c["percentage"]}%</span></div>',
                         unsafe_allow_html=True
                     )
-                from datetime import datetime, timezone
+                from datetime import datetime
                 dt_str = rec.get("registered_at", "")
                 if dt_str:
                     dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00")).astimezone()
