@@ -154,11 +154,7 @@ def main():
         if p1 >= 60 and p1 <= 80 and p2 >= 15 and extracted_colors[2]['percentage'] >= 3:
             st.write("・このままのバランスを維持しましょう！")
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.image(img_rgb, caption="元画像", use_container_width=True)
-        with col2:
-            st.image(img_pure_clothing, caption="服だけ抽出", use_container_width=True)
+        st.image(img_rgb, caption="元画像", use_container_width=True)
 
         fig, ax = plt.subplots(figsize=(5, 5))
         colors_hex = [f'#{c["rgb"][0]:02x}{c["rgb"][1]:02x}{c["rgb"][2]:02x}' for c in extracted_colors if c['percentage'] > 0]
