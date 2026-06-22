@@ -101,9 +101,31 @@ def analyze(img_rgb, model_path):
         extracted_colors.append({'rgb': np.array([0,0,0]), 'percentage': 0.0, 'name': '―'})
 
     p1, p2, p3 = extracted_colors[0]['percentage'], extracted_colors[1]['percentage'], extracted_colors[2]['percentage']
-    diff = abs(p1 - 70) + abs(p2 - 25) + abs(p3 - 5)
-    score = max(0, int(100 - (diff * 0.7)))
 
+    # ベーススコア（70:25:5ルール）
+    diff = abs(p1 - 70) + abs(p2 - 25) + abs(p3 - 5)
+    base_score = max(0, 100 - int(diff * 0.7))
+    
+    # 色相取得
+    def get_hue(rgb):
+        hsv = cv2.cvtColor(np.uint8([[[int(rgb[0]), int(rgb[1]), int(rgb[2])]]]), cv2.COLOR_RGB2HSV)[0][0]
+        return int(hsv[0])
+    
+    hues = [get_hue(c['rgb']) for c in extracted_colors[:3] if c['percentage'] > 1]
+    
+    bonus = 0
+    if len(hues) >= 2:
+        h_diff = abs(hues[0] - hues[1])
+        h_diff = min(h_diff, 180 - h_diff)
+        if h_diff < 30:   bonus += 10  # 類似色
+        elif h_diff > 70: bonus += 8   # 補色・対比色
+    
+    # 色数ペナルティ（有効色が4色以上）
+    active_colors = [c for c in extracted_colors if c['percentage'] > 5]
+    if len(active_colors) >= 4:
+        bonus -= 10
+    
+    score = max(0, min(100, base_score + bonus))
     return img_rgb, img_pure_clothing, extracted_colors, score, (xmin, ymin, xmax, ymax), person_area
 
 def main():
