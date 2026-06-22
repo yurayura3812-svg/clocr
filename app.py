@@ -189,12 +189,5 @@ def main():
             ax.set_title(f"Color Balance (Score: {score})")
             st.pyplot(fig)
 
-        colors_hex = [f'#{c["rgb"][0]:02x}{c["rgb"][1]:02x}{c["rgb"][2]:02x}' for c in extracted_colors if c['percentage'] > 0]
-        sizes = [c['percentage'] for c in extracted_colors if c['percentage'] > 0]
-        labels_pie = [f"{c['percentage']:.1f}%" for c in extracted_colors if c['percentage'] > 0]
-        ax.pie(sizes, labels=labels_pie, colors=colors_hex, startangle=90, counterclock=False,
-               wedgeprops={'width': 0.4, 'edgecolor': 'white'})
-        ax.set_title(f"Color Balance (Score: {score})")
-
 if __name__ == "__main__":
     main()
