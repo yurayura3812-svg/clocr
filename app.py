@@ -231,6 +231,124 @@ def page_diagnosis():
                 except Exception as e:
                     st.error(f"保存エラー: {e}")
 
+def page_clothes_register():
+    st.title("👕 服を登録")
+    st.markdown("服単体の写真をアップロードして登録します。")
+
+    model_path = download_model()
+
+    uploaded = st.file_uploader("服の写真をアップロード", type=["jpg", "jpeg", "png"])
+
+    if uploaded:
+        file_bytes = np.frombuffer(uploaded.read(), np.uint8)
+        img_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+
+        with st.spinner("色を解析中..."):
+            result = analyze(img_rgb, model_path)
+
+        valid_colors = [c for c in result['extracted_colors'] if c['percentage'] > 0.5]
+        main_color = valid_colors[0] if valid_colors else None
+
+        st.image(result['img_rgb'], caption="アップロード画像", use_container_width=True)
+
+        if main_color:
+            hex_color = f'#{int(main_color["rgb"][0]):02x}{int(main_color["rgb"][1]):02x}{int(main_color["rgb"][2]):02x}'
+            color_name = rgb_to_color_name(main_color['rgb'])
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:10px;margin:8px 0">'
+                f'<div style="width:40px;height:40px;background:{hex_color};border-radius:6px;border:1px solid #ccc"></div>'
+                f'<span>メインカラー: <b>{color_name}</b> ({hex_color})</span></div>',
+                unsafe_allow_html=True
+            )
+
+        st.divider()
+        col_a, col_b = st.columns(2)
+        with col_a:
+            clothes_type = st.selectbox("種類", ["トップス", "ボトムス", "アウター", "シューズ", "バッグ", "その他"])
+        with col_b:
+            brand = st.text_input("ブランド（任意）", placeholder="例: UNIQLO")
+
+        season = st.multiselect("季節", ["春", "夏", "秋", "冬"], default=["春", "秋"])
+        memo = st.text_input("メモ（任意）", placeholder="お気に入りの一枚など...")
+
+        if st.button("登録する", type="primary"):
+            supabase = get_supabase()
+            if supabase is None:
+                st.error("Supabase未設定です。")
+            else:
+                try:
+                    img_bytes = cv2.imencode('.jpg', cv2.cvtColor(result['img_rgb'], cv2.COLOR_RGB2BGR))[1].tobytes()
+                    file_name = f"{uuid.uuid4()}.jpg"
+                    supabase.storage.from_("wardrobe-images").upload(
+                        file_name, img_bytes, {"content-type": "image/jpeg"}
+                    )
+                    image_url = supabase.storage.from_("wardrobe-images").get_public_url(file_name)
+
+                    color_data = [
+                        {"rgb": [int(c['rgb'][0]), int(c['rgb'][1]), int(c['rgb'][2])],
+                         "name": rgb_to_color_name(c['rgb']),
+                         "percentage": round(c['percentage'], 1)}
+                        for c in valid_colors[:3]
+                    ]
+
+                    supabase.table("clothes").insert({
+                        "type": clothes_type,
+                        "brand": brand or None,
+                        "color_name": rgb_to_color_name(main_color['rgb']) if main_color else None,
+                        "color_hex": hex_color if main_color else None,
+                        "colors": color_data,
+                        "season": season,
+                        "image_url": image_url,
+                        "memo": memo or None
+                    }).execute()
+
+                    st.success("登録しました！")
+                except Exception as e:
+                    st.error(f"登録エラー: {e}")
+
+def page_clothes_list():
+    st.title("🗂️ 服一覧")
+    supabase = get_supabase()
+    if supabase is None:
+        st.error("Supabase未設定です。")
+        return
+
+    type_filter = st.selectbox("種類で絞り込み", ["すべて", "トップス", "ボトムス", "アウター", "シューズ", "バッグ", "その他"])
+
+    try:
+        query = supabase.table("clothes").select("*").order("registered_at", desc=True)
+        if type_filter != "すべて":
+            query = query.eq("type", type_filter)
+        res = query.execute()
+        records = res.data
+    except Exception as e:
+        st.error(f"取得エラー: {e}")
+        return
+
+    if not records:
+        st.info("まだ服が登録されていません。")
+        return
+
+    cols = st.columns(3)
+    for i, rec in enumerate(records):
+        with cols[i % 3]:
+            if rec.get("image_url"):
+                st.image(rec["image_url"], use_container_width=True)
+            hex_color = rec.get("color_hex", "#cccccc")
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:6px;margin:4px 0">'
+                f'<div style="width:16px;height:16px;background:{hex_color};border-radius:3px;border:1px solid #ccc"></div>'
+                f'<span><b>{rec.get("color_name","")}</b></span></div>',
+                unsafe_allow_html=True
+            )
+            st.markdown(f"**{rec.get('type','')}**" + (f" / {rec['brand']}" if rec.get('brand') else ""))
+            seasons = rec.get('season') or []
+            if seasons:
+                st.caption(" ".join(seasons))
+            if rec.get('memo'):
+                st.caption(rec['memo'])
+
 def page_history():
     st.title("📋 コーデ履歴")
     supabase = get_supabase()
@@ -279,11 +397,15 @@ def page_history():
 
 def main():
     st.set_page_config(page_title="コーデ色バランス診断", page_icon="👗")
-    page = st.sidebar.radio("メニュー", ["診断する", "コーデ履歴"])
+    page = st.sidebar.radio("メニュー", ["診断する", "コーデ履歴", "服を登録", "服一覧"])
     if page == "診断する":
         page_diagnosis()
-    else:
+    elif page == "コーデ履歴":
         page_history()
+    elif page == "服を登録":
+        page_clothes_register()
+    else:
+        page_clothes_list()
 
 if __name__ == "__main__":
     main()
