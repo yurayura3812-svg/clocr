@@ -3,3 +3,4 @@ opencv-python-headless
 numpy<2.0
 mediapipe==0.10.9
 matplotlib
+supabase
