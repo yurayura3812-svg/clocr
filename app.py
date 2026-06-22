@@ -132,8 +132,7 @@ def analyze(img_rgb, model_path):
         'bbox': (xmin, ymin, xmax, ymax)
     }
 
-def main():
-    st.set_page_config(page_title="コーデ色バランス診断", page_icon="👗")
+def page_diagnosis():
     st.title("👗 コーデ色バランス診断")
     st.markdown("服装の写真をアップロードして、70:25:5の黄金比カラーバランスを診断します。")
 
@@ -160,11 +159,7 @@ def main():
         else:
             st.warning("カラーバランスを調整するとより良くなります。")
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.image(result['img_rgb'], caption="アップロード画像", use_container_width=True)
-        with col2:
-            st.image(result['img_pure_clothing'], caption="衣服領域（肌色除去済み）", use_container_width=True)
+        st.image(result['img_rgb'], caption="アップロード画像", use_container_width=True)
 
         st.subheader("カラー分析結果")
         valid_colors = [c for c in colors if c['percentage'] > 0.5]
@@ -235,6 +230,60 @@ def main():
                     st.success("保存しました！")
                 except Exception as e:
                     st.error(f"保存エラー: {e}")
+
+def page_history():
+    st.title("📋 コーデ履歴")
+    supabase = get_supabase()
+    if supabase is None:
+        st.error("Supabase未設定です。")
+        return
+    try:
+        res = supabase.table("outfit_log").select("*").order("registered_at", desc=True).execute()
+        records = res.data
+    except Exception as e:
+        st.error(f"取得エラー: {e}")
+        return
+
+    if not records:
+        st.info("まだ記録がありません。")
+        return
+
+    for rec in records:
+        with st.container():
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                if rec.get("image_url"):
+                    st.image(rec["image_url"], use_container_width=True)
+            with col2:
+                st.markdown(f"**スコア: {rec.get('score', '-')} / 100**")
+                st.markdown(f"カテゴリ: {rec.get('category', '-')}")
+                seasons = rec.get('season') or []
+                st.markdown(f"季節: {' / '.join(seasons) if seasons else '-'}")
+                if rec.get('memo'):
+                    st.markdown(f"メモ: {rec['memo']}")
+                colors = rec.get('colors') or []
+                for c in colors:
+                    hex_color = f'#{c["rgb"][0]:02x}{c["rgb"][1]:02x}{c["rgb"][2]:02x}'
+                    st.markdown(
+                        f'<div style="display:inline-flex;align-items:center;gap:6px;margin-right:8px">'
+                        f'<div style="width:20px;height:20px;background:{hex_color};border-radius:4px;border:1px solid #ccc"></div>'
+                        f'<span>{c["name"]} {c["percentage"]}%</span></div>',
+                        unsafe_allow_html=True
+                    )
+                from datetime import datetime, timezone
+                dt_str = rec.get("registered_at", "")
+                if dt_str:
+                    dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00")).astimezone()
+                    st.caption(dt.strftime("%Y/%m/%d %H:%M"))
+            st.divider()
+
+def main():
+    st.set_page_config(page_title="コーデ色バランス診断", page_icon="👗")
+    page = st.sidebar.radio("メニュー", ["診断する", "コーデ履歴"])
+    if page == "診断する":
+        page_diagnosis()
+    else:
+        page_history()
 
 if __name__ == "__main__":
     main()
