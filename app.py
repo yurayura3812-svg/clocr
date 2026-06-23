@@ -209,7 +209,7 @@ def page_diagnosis():
         else:
             st.warning("カラーバランスを調整するとより良くなります。")
 
-        st.image(result['img_rgb'], caption="アップロード画像", use_container_width=True)
+        st.image(result['img_rgb'], caption="アップロード画像", width=400)
 
         st.subheader("カラー分析結果")
         for i, c in enumerate(valid_colors[:5]):
