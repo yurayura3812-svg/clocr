@@ -35,6 +35,34 @@ def rgb_to_color_name(rgb):
     elif h < 160: return "パープル"
     else: return "レッド"
 
+def get_color_harmony(hues):
+    if len(hues) == 0:
+        return "モノトーン", 8
+    if len(hues) == 1:
+        return "ワントーン", 5
+
+    def hue_diff(a, b):
+        d = abs(a - b)
+        return min(d, 360 - d)
+
+    diffs = []
+    for i in range(len(hues)):
+        for j in range(i + 1, len(hues)):
+            diffs.append(hue_diff(hues[i], hues[j]))
+
+    max_diff = max(diffs)
+
+    if max_diff <= 30:
+        return "類似色配色（まとまり感◎）", 8
+    elif max_diff <= 90:
+        return "中差色配色（バランス良い）", 5
+    elif 150 <= max_diff <= 210:
+        return "補色配色（インパクト大・上級者向け）", 2
+    elif 110 <= max_diff <= 130:
+        return "トライアド配色（鮮やか・カジュアル）", 4
+    else:
+        return "対比色配色（メリハリあり）", 3
+
 def get_supabase():
     try:
         from supabase import create_client
