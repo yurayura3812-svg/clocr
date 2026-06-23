@@ -145,11 +145,13 @@ def analyze(img_rgb, model_path):
     hues = []
     for c in extracted_colors[:3]:
         if c['percentage'] > 5:
-            hsv_c = cv2.cvtColor(np.uint8([[[int(c['rgb'][0]), int(c['rgb'][1]), int(c['rgb'][2])]]]),
-                                  cv2.COLOR_RGB2HSV)[0][0]
-            if int(hsv_c[1]) >= 40:
-                hues.append(int(hsv_c[0]) * 2)
-
+            h = int(cv2.cvtColor(np.uint8([[[int(c['rgb'][0]), int(c['rgb'][1]), int(c['rgb'][2])]]]),
+                             cv2.COLOR_RGB2HSV)[0][0][0])
+            s = int(cv2.cvtColor(np.uint8([[[int(c['rgb'][0]), int(c['rgb'][1]), int(c['rgb'][2])]]]),
+                             cv2.COLOR_RGB2HSV)[0][0][1])
+            if s >= 40:
+                hues.append(h * 2)
+    
     harmony_label, harmony_bonus = get_color_harmony(hues)
     color_count_penalty = max(0, (len(extracted_colors) - 3) * 3)
     score = max(0, min(100, int(100 - diff * 0.7) + harmony_bonus - color_count_penalty))
@@ -194,10 +196,10 @@ def page_diagnosis():
             result = analyze(img_rgb, model_path)
 
         score = result['score']
-        harmony_label = result['harmony_label']
         colors = result['extracted_colors']
         valid_colors = [c for c in colors if c['percentage'] > 0.5]
 
+        harmony_label = result['harmony_label']
         st.subheader(f"スコア: {score} / 100")
         st.caption(f"配色タイプ: {harmony_label}")
         if score >= 80:
@@ -234,22 +236,29 @@ def page_diagnosis():
         p2 = valid_colors[1]['percentage'] if len(valid_colors) > 1 else 0
         p3 = valid_colors[2]['percentage'] if len(valid_colors) > 2 else 0
 
+        base_color_name = valid_colors[0]['rgb'] if len(valid_colors) > 0 else None
+        base_name = rgb_to_color_name(base_color_name) if base_color_name is not None else "メインカラー"
+
         if score >= 80:
             st.success("カラーバランスは理想的です。このコーデのまま着ていけばOKです！")
         else:
             if p1 < 60:
-                st.warning(f"ベースカラーが{p1:.0f}%と少なめです（目標70%）。ホワイト・グレー・ベージュなど無彩色のアイテムを増やすとスコアが上がります。")
+                st.warning(f"ベースカラー（{base_name}）が{p1:.0f}%と少なめです（目標70%）。トップスかボトムスのどちらかをホワイト・グレー・ベージュ系の無彩色に変えると、{base_name}の割合が増えてバランスが整います。")
             elif p1 > 85:
-                st.warning(f"ベースカラーが{p1:.0f}%と多すぎます（目標70%）。2色目・3色目を加えてメリハリをつけましょう。")
+                st.warning(f"ベースカラー（{base_name}）が{p1:.0f}%と多すぎます（目標70%）。ボトムスやアウターを別の色に変えるか、カラーの小物を足してメリハリをつけましょう。")
             if p2 < 15:
-                st.warning(f"アソートカラー（2色目）が{p2:.0f}%と少なめです（目標25%）。ボトムスやアウターで色を足すと良くなります。")
+                if p1 > 85:
+                    st.warning(f"2色目がほぼありません（{p2:.0f}%、目標25%）。ボトムスやアウターを{base_name}以外の色にすると全体がまとまります。")
+                else:
+                    st.warning(f"2色目が{p2:.0f}%と少なめです（目標25%）。ボトムスかアウターの色をもう少し主張させると、メリハリが出ます。")
             elif p2 > 35:
-                st.warning(f"アソートカラーが{p2:.0f}%と多すぎます（目標25%）。2色目を少し抑えるとまとまりが出ます。")
+                st.warning(f"2色目が{p2:.0f}%と多すぎます（目標25%）。トップスとボトムスの色が近い・もしくは2色が拮抗しています。どちらかを{base_name}系に寄せると落ち着きます。")
             if p3 < 2:
-                st.warning("差し色（アクセント）がほぼありません（目標5%）。バッグ・シューズ・小物など5%程度の差し色を加えると引き締まります。")
+                st.warning("差し色がほぼゼロです（目標5%）。バッグ・シューズ・マフラーなど小物1点だけカラーを入れると印象が締まります。")
             elif p3 > 15:
-                st.warning(f"差し色が{p3:.0f}%と多すぎます（目標5%）。アクセントは小物程度に抑えるとスッキリします。")
+                st.warning(f"差し色が{p3:.0f}%と多すぎます（目標5%）。アクセントは小物サイズに抑えるのがポイントです。バッグかシューズのどちらかをベース色系に変えてみましょう。")
 
+        # 手持ちの服からの提案
         supabase = get_supabase()
         clothes_list = []
         if supabase:
@@ -259,7 +268,18 @@ def page_diagnosis():
                 pass
 
         if clothes_list:
-            suggestions = []
+            def item_role_hint(item_type):
+                if item_type in ["トップス"]: return "トップスとして着ると"
+                if item_type in ["ボトムス"]: return "ボトムスに合わせると"
+                if item_type in ["アウター"]: return "アウターに羽織ると"
+                if item_type in ["シューズ"]: return "足元に取り入れると"
+                if item_type in ["バッグ"]: return "バッグとして持つと"
+                return "合わせると"
+
+            base_candidate = None
+            assort_candidate = None
+            accent_candidate = None
+
             for item in clothes_list:
                 if not item.get('color_hex') or not item.get('type'):
                     continue
@@ -271,16 +291,18 @@ def page_diagnosis():
                 hsv = cv2.cvtColor(np.uint8([[[ir, ig, ib]]]), cv2.COLOR_RGB2HSV)[0][0]
                 is_neutral = int(hsv[1]) < 60
 
-                if p1 < 65 and is_neutral:
-                    suggestions.append((item, f"**{item['color_name']}の{item['type']}**をベースに取り入れると70%ルールに近づきます。"))
-                elif p3 < 3 and not is_neutral:
-                    suggestions.append((item, f"**{item['color_name']}の{item['type']}**を差し色に使うと印象が締まります。"))
-                elif 60 <= p1 <= 80 and p2 < 20:
-                    suggestions.append((item, f"**{item['color_name']}の{item['type']}**をアソートとして合わせるとバランスが上がります。"))
+                if p1 < 65 and is_neutral and base_candidate is None:
+                    base_candidate = (item, f"**{item.get('color_name','')}の{item['type']}**を{item_role_hint(item['type'])}ベースカラーが増えてバランスが良くなります（目標70%、現在{p1:.0f}%）。")
+                elif p3 < 3 and not is_neutral and accent_candidate is None:
+                    accent_candidate = (item, f"**{item.get('color_name','')}の{item['type']}**を{item_role_hint(item['type'])}差し色になってコーデが引き締まります（目標5%、現在{p3:.0f}%）。")
+                elif 60 <= p1 <= 80 and p2 < 20 and assort_candidate is None:
+                    assort_candidate = (item, f"**{item.get('color_name','')}の{item['type']}**を{item_role_hint(item['type'])}アソートカラーとしてバランスが上がります（目標25%、現在{p2:.0f}%）。")
+
+            suggestions = [c for c in [base_candidate, assort_candidate, accent_candidate] if c is not None]
 
             if suggestions:
                 st.markdown("**👕 手持ちの服からの提案**")
-                for item, msg in suggestions[:3]:
+                for item, msg in suggestions:
                     col_img, col_msg = st.columns([1, 3])
                     with col_img:
                         if item.get('image_url'):
@@ -291,11 +313,11 @@ def page_diagnosis():
                             st.caption(item['brand'])
         else:
             if p1 < 60:
-                st.info("ベースカラーが足りないので、ホワイト・グレー・ベージュのトップスやボトムスを1枚追加すると効果的です。")
+                st.info(f"ベースカラー（{base_name}）が{p1:.0f}%と少なめです。トップスかボトムスをホワイト・グレー・ベージュ系に変えると、ベース割合が70%に近づきます。服を登録すると具体的な提案ができます。")
             elif p3 < 3:
-                st.info("差し色がないので、カラーのバッグ・スニーカー・マフラーなど小物を1点加えるだけでコーデが引き締まります。")
+                st.info("差し色（3色目）がほぼゼロです。バッグ・スニーカー・マフラーなど小物1点にカラーを入れるだけでスコアが上がります。服を登録すると手持ちから具体的に提案します。")
             elif p2 < 15:
-                st.info("アソートカラーが少ないです。ベースカラーと相性の良い近い色のボトムスやアウターを足してみましょう。")
+                st.info(f"2色目が{p2:.0f}%と少なめです。ボトムスやアウターを{base_name}以外の色にして、25%前後になるとバランスが良くなります。服を登録すると手持ちから提案します。")
 
         st.divider()
         st.subheader("今日のコーデを記録する")
@@ -489,9 +511,8 @@ def page_clothes_list():
                 st.caption(rec['memo'])
 
             with st.expander("編集"):
-                type_opts = ["トップス", "ボトムス", "アウター", "シューズ", "バッグ", "その他"]
-                new_type = st.selectbox("種類", type_opts,
-                                        index=type_opts.index(rec.get('type', 'トップス')) if rec.get('type') in type_opts else 0,
+                new_type = st.selectbox("種類", ["トップス", "ボトムス", "アウター", "シューズ", "バッグ", "その他"],
+                                        index=["トップス", "ボトムス", "アウター", "シューズ", "バッグ", "その他"].index(rec.get('type', 'トップス')) if rec.get('type') in ["トップス", "ボトムス", "アウター", "シューズ", "バッグ", "その他"] else 0,
                                         key=f"type_{rec['id']}")
                 new_brand = st.text_input("ブランド", value=rec.get('brand') or "", key=f"brand_{rec['id']}")
                 season_opts = ["春", "夏", "秋", "冬"]
