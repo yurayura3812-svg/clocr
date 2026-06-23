@@ -193,6 +193,54 @@ def page_diagnosis():
         graph_bytes = render_pie_chart(valid_colors, score)
         st.image(graph_bytes)
 
+        # 登録済み服からコーデ提案
+        supabase = get_supabase()
+        if supabase:
+            try:
+                clothes_res = supabase.table("clothes").select("*").execute()
+                clothes_list = clothes_res.data
+                if clothes_list:
+                    st.divider()
+                    st.subheader("👕 手持ちの服でアドバイス")
+                    p1 = valid_colors[0]['percentage'] if len(valid_colors) > 0 else 0
+                    p2 = valid_colors[1]['percentage'] if len(valid_colors) > 1 else 0
+                    p3 = valid_colors[2]['percentage'] if len(valid_colors) > 2 else 0
+
+                    suggestions = []
+                    for item in clothes_list:
+                        if not item.get('color_hex') or not item.get('type'):
+                            continue
+                        hex_val = item['color_hex'].lstrip('#')
+                        try:
+                            ir, ig, ib = int(hex_val[0:2], 16), int(hex_val[2:4], 16), int(hex_val[4:6], 16)
+                        except Exception:
+                            continue
+                        hsv = cv2.cvtColor(np.uint8([[[ir, ig, ib]]]), cv2.COLOR_RGB2HSV)[0][0]
+                        s_val = int(hsv[1])
+                        is_neutral = s_val < 60
+
+                        if p1 < 65 and is_neutral:
+                            suggestions.append((item, f"ベースカラーが{p1:.0f}%と少なめです。**{item['color_name']}の{item['type']}**を取り入れるとバランスが上がります。"))
+                        elif p3 < 3 and not is_neutral:
+                            suggestions.append((item, f"差し色が少ないです。**{item['color_name']}の{item['type']}**をアクセントに加えると印象が締まります。"))
+                        elif 60 <= p1 <= 80 and p2 < 20:
+                            suggestions.append((item, f"アソートカラーが{p2:.0f}%と少なめです。**{item['color_name']}の{item['type']}**を合わせるとより完成度が上がります。"))
+
+                    if suggestions:
+                        for item, msg in suggestions[:3]:
+                            col_img, col_msg = st.columns([1, 3])
+                            with col_img:
+                                if item.get('image_url'):
+                                    st.image(item['image_url'], use_container_width=True)
+                            with col_msg:
+                                st.markdown(msg)
+                                if item.get('brand'):
+                                    st.caption(item['brand'])
+                    else:
+                        st.info("現在のコーデは手持ちの服と組み合わせても十分バランスが取れています。")
+            except Exception:
+                pass
+
         st.divider()
         st.subheader("今日のコーデを記録する")
 
@@ -463,6 +511,39 @@ def page_history():
                 if dt_str:
                     dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00")).astimezone()
                     st.caption(dt.strftime("%Y/%m/%d %H:%M"))
+
+                with st.expander("編集・削除"):
+                    cat_opts = ["コーデ全体", "トップス", "ボトムス", "アウター", "ワンピース"]
+                    new_cat = st.selectbox("カテゴリ", cat_opts,
+                                           index=cat_opts.index(rec.get('category', 'コーデ全体')) if rec.get('category') in cat_opts else 0,
+                                           key=f"cat_{rec['id']}")
+                    season_opts = ["春", "夏", "秋", "冬"]
+                    new_season = st.multiselect("季節", season_opts,
+                                                default=[s for s in (rec.get('season') or []) if s in season_opts],
+                                                key=f"season_{rec['id']}")
+                    new_memo = st.text_input("メモ", value=rec.get('memo') or "", key=f"memo_{rec['id']}")
+
+                    col_save, col_del = st.columns(2)
+                    with col_save:
+                        if st.button("保存", key=f"save_{rec['id']}"):
+                            try:
+                                supabase.table("outfit_log").update({
+                                    "category": new_cat,
+                                    "season": new_season,
+                                    "memo": new_memo or None
+                                }).eq("id", rec['id']).execute()
+                                st.success("更新しました")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"更新エラー: {e}")
+                    with col_del:
+                        if st.button("削除", key=f"del_{rec['id']}", type="secondary"):
+                            try:
+                                supabase.table("outfit_log").delete().eq("id", rec['id']).execute()
+                                st.success("削除しました")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"削除エラー: {e}")
             st.divider()
 
 def main():
