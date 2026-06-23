@@ -151,7 +151,7 @@ def analyze(img_rgb, model_path):
                              cv2.COLOR_RGB2HSV)[0][0][1])
             if s >= 40:
                 hues.append(h * 2)
-    
+
     harmony_label, harmony_bonus = get_color_harmony(hues)
     color_count_penalty = max(0, (len(extracted_colors) - 3) * 3)
     score = max(0, min(100, int(100 - diff * 0.7) + harmony_bonus - color_count_penalty))
@@ -209,7 +209,7 @@ def page_diagnosis():
         else:
             st.warning("カラーバランスを調整するとより良くなります。")
 
-        st.image(result['img_rgb'], caption="アップロード画像", width=400)
+        st.image(result['img_rgb'], caption="アップロード画像", use_container_width=True)
 
         st.subheader("カラー分析結果")
         for i, c in enumerate(valid_colors[:5]):
@@ -228,7 +228,6 @@ def page_diagnosis():
         graph_bytes = render_pie_chart(valid_colors, score)
         st.image(graph_bytes)
 
-        # アドバイスセクション
         st.divider()
         st.subheader("💡 アドバイス")
 
@@ -239,24 +238,39 @@ def page_diagnosis():
         base_color_name = valid_colors[0]['rgb'] if len(valid_colors) > 0 else None
         base_name = rgb_to_color_name(base_color_name) if base_color_name is not None else "メインカラー"
 
+        def is_neutral_rgb(rgb):
+            hsv = cv2.cvtColor(np.uint8([[[int(rgb[0]), int(rgb[1]), int(rgb[2])]]]), cv2.COLOR_RGB2HSV)[0][0]
+            return int(hsv[1]) < 60
+
+        p1_is_neutral = is_neutral_rgb(valid_colors[0]['rgb']) if len(valid_colors) > 0 else True
+        p2_is_neutral = is_neutral_rgb(valid_colors[1]['rgb']) if len(valid_colors) > 1 else True
+        both_neutral = p1_is_neutral and p2_is_neutral
+
         if score >= 80:
             st.success("カラーバランスは理想的です。このコーデのまま着ていけばOKです！")
         else:
-            if p1 < 60:
-                st.warning(f"ベースカラー（{base_name}）が{p1:.0f}%と少なめです（目標70%）。トップスかボトムスのどちらかをホワイト・グレー・ベージュ系の無彩色に変えると、{base_name}の割合が増えてバランスが整います。")
+            if both_neutral and p1 < 60:
+                st.warning(f"グレー・ベージュ系でまとまったコーデですが、色が分散しています（最大色{p1:.0f}%、目標70%）。同じ色のアイテムをもう1枚重ねるか、上下をより近い色で統一するとベース割合が上がります。")
+            elif not p1_is_neutral and p1 < 60:
+                st.warning(f"ベースカラー（{base_name}）が{p1:.0f}%と少なめです（目標70%）。トップスかボトムスをホワイト・グレー・ベージュ系の無彩色に変えると全体がまとまります。")
             elif p1 > 85:
                 st.warning(f"ベースカラー（{base_name}）が{p1:.0f}%と多すぎます（目標70%）。ボトムスやアウターを別の色に変えるか、カラーの小物を足してメリハリをつけましょう。")
-            if p2 < 15:
-                if p1 > 85:
-                    st.warning(f"2色目がほぼありません（{p2:.0f}%、目標25%）。ボトムスやアウターを{base_name}以外の色にすると全体がまとまります。")
-                else:
+
+            if both_neutral and p2 > 35:
+                st.warning(f"無彩色が2色で拮抗しています（{p1:.0f}%と{p2:.0f}%）。上下を同系色でまとめるか、どちらかにカラーアイテムを混ぜてメリハリをつけましょう。")
+            elif not both_neutral:
+                if p2 < 15:
                     st.warning(f"2色目が{p2:.0f}%と少なめです（目標25%）。ボトムスかアウターの色をもう少し主張させると、メリハリが出ます。")
-            elif p2 > 35:
-                st.warning(f"2色目が{p2:.0f}%と多すぎます（目標25%）。トップスとボトムスの色が近い・もしくは2色が拮抗しています。どちらかを{base_name}系に寄せると落ち着きます。")
+                elif p2 > 35:
+                    st.warning(f"2色目が{p2:.0f}%と多すぎます（目標25%）。どちらかをベース色寄りに抑えると落ち着きます。")
+
             if p3 < 2:
-                st.warning("差し色がほぼゼロです（目標5%）。バッグ・シューズ・マフラーなど小物1点だけカラーを入れると印象が締まります。")
+                if both_neutral:
+                    st.warning("無彩色でまとまったコーデです。バッグ・シューズなど小物1点にカラーを入れると印象がぐっと締まります。")
+                else:
+                    st.warning("差し色がほぼゼロです（目標5%）。バッグ・シューズ・マフラーなど小物1点だけカラーを入れると印象が締まります。")
             elif p3 > 15:
-                st.warning(f"差し色が{p3:.0f}%と多すぎます（目標5%）。アクセントは小物サイズに抑えるのがポイントです。バッグかシューズのどちらかをベース色系に変えてみましょう。")
+                st.warning(f"差し色が{p3:.0f}%と多すぎます（目標5%）。アクセントは小物サイズに抑えるのがポイントです。")
 
         # 手持ちの服からの提案
         supabase = get_supabase()
@@ -269,11 +283,11 @@ def page_diagnosis():
 
         if clothes_list:
             def item_role_hint(item_type):
-                if item_type in ["トップス"]: return "トップスとして着ると"
-                if item_type in ["ボトムス"]: return "ボトムスに合わせると"
-                if item_type in ["アウター"]: return "アウターに羽織ると"
-                if item_type in ["シューズ"]: return "足元に取り入れると"
-                if item_type in ["バッグ"]: return "バッグとして持つと"
+                if item_type == "トップス": return "トップスとして着ると"
+                if item_type == "ボトムス": return "ボトムスに合わせると"
+                if item_type == "アウター": return "アウターに羽織ると"
+                if item_type == "シューズ": return "足元に取り入れると"
+                if item_type == "バッグ": return "バッグとして持つと"
                 return "合わせると"
 
             base_candidate = None
