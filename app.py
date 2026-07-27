@@ -7,6 +7,7 @@ import urllib.request
 import os
 import uuid
 import io
+import pickle
 
 def download_model():
     model_path = "selfie_segmenter.tflite"
@@ -14,6 +15,17 @@ def download_model():
         url = "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite"
         urllib.request.urlretrieve(url, model_path)
     return model_path
+
+# ------------------------------------------------------------
+# MLモデルの読み込み（train_outfit_model.py で作った学習済みモデル）
+# ------------------------------------------------------------
+@st.cache_resource
+def load_ml_model():
+    try:
+        with open("outfit_score_model.pkl", "rb") as f:
+            return pickle.load(f)
+    except FileNotFoundError:
+        return None
 
 def rgb_to_color_name(rgb):
     r, g, b = int(rgb[0]), int(rgb[1]), int(rgb[2])
@@ -131,8 +143,9 @@ def analyze(img_rgb, model_path):
         extracted_colors.append({'rgb': rgb_color, 'percentage': percentage})
 
     total = sum(c['percentage'] for c in extracted_colors)
-    for c in extracted_colors:
-        c['percentage'] = (c['percentage'] / total) * 100
+    if total > 0:
+        for c in extracted_colors:
+            c['percentage'] = (c['percentage'] / total) * 100
 
     while len(extracted_colors) < 3:
         extracted_colors.append({'rgb': np.array([0, 0, 0]), 'percentage': 0.0})
@@ -143,14 +156,18 @@ def analyze(img_rgb, model_path):
     diff = abs(p1 - 70) + abs(p2 - 25) + abs(p3 - 5)
 
     hues = []
+    # ML用の追加特徴量（色相・彩度）― train_outfit_model.py と同じ形で計算する
+    ml_hues = []
+    ml_sats = []
     for c in extracted_colors[:3]:
-        if c['percentage'] > 5:
-            h = int(cv2.cvtColor(np.uint8([[[int(c['rgb'][0]), int(c['rgb'][1]), int(c['rgb'][2])]]]),
-                             cv2.COLOR_RGB2HSV)[0][0][0])
-            s = int(cv2.cvtColor(np.uint8([[[int(c['rgb'][0]), int(c['rgb'][1]), int(c['rgb'][2])]]]),
-                             cv2.COLOR_RGB2HSV)[0][0][1])
-            if s >= 40:
-                hues.append(h * 2)
+        h = int(cv2.cvtColor(np.uint8([[[int(c['rgb'][0]), int(c['rgb'][1]), int(c['rgb'][2])]]]),
+                         cv2.COLOR_RGB2HSV)[0][0][0])
+        s = int(cv2.cvtColor(np.uint8([[[int(c['rgb'][0]), int(c['rgb'][1]), int(c['rgb'][2])]]]),
+                         cv2.COLOR_RGB2HSV)[0][0][1])
+        ml_hues.append(h * 2)
+        ml_sats.append(s)
+        if s >= 40:
+            hues.append(h * 2)
 
     harmony_label, harmony_bonus = get_color_harmony(hues)
     color_count_penalty = max(0, (len(extracted_colors) - 3) * 3)
@@ -163,7 +180,10 @@ def analyze(img_rgb, model_path):
         'person_area': person_area,
         'score': score,
         'harmony_label': harmony_label,
-        'bbox': (xmin, ymin, xmax, ymax)
+        'bbox': (xmin, ymin, xmax, ymax),
+        # train_outfit_model.py の feature_cols と同じ並び順にすること
+        'ml_features': [p1, p2, p3, ml_hues[0], ml_hues[1], ml_hues[2],
+                         ml_sats[0], ml_sats[1], ml_sats[2], diff],
     }
 
 def render_pie_chart(valid_colors, score):
@@ -185,6 +205,7 @@ def page_diagnosis():
     st.markdown("服装の写真をアップロードして、70:25:5の黄金比カラーバランスを診断します。")
 
     model_path = download_model()
+    ml_model = load_ml_model()
     uploaded = st.file_uploader("全身コーデの写真をアップロード", type=["jpg", "jpeg", "png"])
 
     if uploaded:
@@ -195,13 +216,26 @@ def page_diagnosis():
         with st.spinner("AI解析中..."):
             result = analyze(img_rgb, model_path)
 
-        score = result['score']
+        rule_score = result['score']
         colors = result['extracted_colors']
         valid_colors = [c for c in colors if c['percentage'] > 0.5]
 
+        # MLモデルがあれば予測スコアを計算、なければルールベースのみ
+        if ml_model is not None:
+            ml_score = int(ml_model.predict([result['ml_features']])[0])
+            ml_score = max(0, min(100, ml_score))
+            score = ml_score
+        else:
+            ml_score = None
+            score = rule_score
+
         harmony_label = result['harmony_label']
         st.subheader(f"スコア: {score} / 100")
-        st.caption(f"配色タイプ: {harmony_label}")
+        if ml_score is not None:
+            st.caption(f"配色タイプ: {harmony_label}　（ルールベース参考値: {rule_score}点）")
+        else:
+            st.caption(f"配色タイプ: {harmony_label}")
+
         if score >= 80:
             st.success("バランス抜群！理想的なコーデです。")
         elif score >= 60:
@@ -639,7 +673,12 @@ def page_history():
 
 def main():
     st.set_page_config(page_title="コーデ色バランス診断", page_icon="👗")
+    ml_model = load_ml_model()
     page = st.sidebar.radio("メニュー", ["診断する", "コーデ履歴", "服を登録", "服一覧"])
+    if ml_model is None:
+        st.sidebar.caption("⚠ 学習済みモデル未検出。ルールベースのスコアで動作中です。")
+    else:
+        st.sidebar.caption("✅ 学習済みモデルを使用中")
     if page == "診断する":
         page_diagnosis()
     elif page == "コーデ履歴":
