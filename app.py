@@ -121,26 +121,31 @@ def analyze(img_rgb, model_path):
         ymin, ymax, xmin, xmax = 0, height, 0, width
         person_area = width * height
 
-    img_blurred = cv2.GaussianBlur(img_pure_clothing, (15, 15), 0)
+    img_blurred = cv2.GaussianBlur(img_rgb, (15, 15), 0)
     img_hsv = cv2.cvtColor(img_blurred, cv2.COLOR_RGB2HSV)
-    pixels = img_hsv.reshape((-1, 3)).astype(np.float32)
 
-    K = 6
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
-    _, labels, centers = cv2.kmeans(pixels, K, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
-
-    labels = labels.flatten()
-    counts = np.bincount(labels)
-    sorted_indices = np.argsort(counts)[::-1]
+    # 背景・肌を塗りつぶした画像全体ではなく、服のマスク部分のピクセルだけを
+    # クラスタリングに渡す。こうしないと「マスクで塗りつぶした黒(0,0,0)」と
+    # 「本物の黒い服」が区別できず、黒い服が誤って除外されてしまう。
+    mask_flat = pure_clothing_mask.flatten().astype(bool)
+    all_pixels = img_hsv.reshape((-1, 3)).astype(np.float32)
+    pixels = all_pixels[mask_flat]
 
     extracted_colors = []
-    for idx in sorted_indices:
-        hsv_color = np.uint8([[centers[idx]]])
-        rgb_color = cv2.cvtColor(hsv_color, cv2.COLOR_HSV2RGB)[0][0]
-        if rgb_color[0] < 20 and rgb_color[1] < 20 and rgb_color[2] < 20:
-            continue
-        percentage = (counts[idx] / person_area) * 100
-        extracted_colors.append({'rgb': rgb_color, 'percentage': percentage})
+    if len(pixels) > 0:
+        K = min(6, len(pixels))
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+        _, labels, centers = cv2.kmeans(pixels, K, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
+
+        labels = labels.flatten()
+        counts = np.bincount(labels)
+        sorted_indices = np.argsort(counts)[::-1]
+
+        for idx in sorted_indices:
+            hsv_color = np.uint8([[centers[idx]]])
+            rgb_color = cv2.cvtColor(hsv_color, cv2.COLOR_HSV2RGB)[0][0]
+            percentage = (counts[idx] / len(pixels)) * 100
+            extracted_colors.append({'rgb': rgb_color, 'percentage': percentage})
 
     total = sum(c['percentage'] for c in extracted_colors)
     if total > 0:
@@ -189,11 +194,16 @@ def analyze(img_rgb, model_path):
 def render_pie_chart(valid_colors, score):
     fig, ax = plt.subplots(figsize=(5, 5))
     sizes = [c['percentage'] for c in valid_colors]
-    hex_colors = [f'#{int(c["rgb"][0]):02x}{int(c["rgb"][1]):02x}{int(c["rgb"][2]):02x}' for c in valid_colors]
-    labels_pie = [f"{c['percentage']:.1f}%" for c in valid_colors]
-    ax.pie(sizes, labels=labels_pie, colors=hex_colors, startangle=90, counterclock=False,
-           wedgeprops={'width': 0.4, 'edgecolor': 'white'})
-    ax.set_title(f"Color Balance (Score: {score})")
+    if not sizes or sum(sizes) <= 0:
+        # 色を1つも検出できなかった場合のフォールバック（クラッシュ防止）
+        ax.text(0.5, 0.5, "色を検出できませんでした", ha='center', va='center')
+        ax.axis('off')
+    else:
+        hex_colors = [f'#{int(c["rgb"][0]):02x}{int(c["rgb"][1]):02x}{int(c["rgb"][2]):02x}' for c in valid_colors]
+        labels_pie = [f"{c['percentage']:.1f}%" for c in valid_colors]
+        ax.pie(sizes, labels=labels_pie, colors=hex_colors, startangle=90, counterclock=False,
+               wedgeprops={'width': 0.4, 'edgecolor': 'white'})
+        ax.set_title(f"Color Balance (Score: {score})")
     buf = io.BytesIO()
     plt.savefig(buf, format='png', bbox_inches='tight')
     plt.close()
