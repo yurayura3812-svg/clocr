@@ -671,10 +671,115 @@ def page_history():
                                 st.error(f"削除エラー: {e}")
             st.divider()
 
+def page_training_data():
+    st.title("🧪 学習データ収集")
+    st.markdown(
+        "画像をアップロードして、自分の主観で「良いコーデ度」を採点してください。"
+        "ここで貯めたデータが、AIモデルの学習データになります。"
+    )
+
+    supabase = get_supabase()
+    if supabase is None:
+        st.error("Supabase未設定です。学習データの保存にはSupabase接続が必要です。")
+        return
+
+    model_path = download_model()
+    uploaded = st.file_uploader(
+        "採点したい画像をアップロード", type=["jpg", "jpeg", "png"], key="training_uploader"
+    )
+
+    if uploaded:
+        file_bytes = np.frombuffer(uploaded.read(), np.uint8)
+        img_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+
+        with st.spinner("特徴量を計算中..."):
+            result = analyze(img_rgb, model_path)
+
+        st.image(result['img_rgb'], caption="アップロード画像", width=300)
+
+        p1, p2, p3, hue1, hue2, hue3, sat1, sat2, sat3, diff = result['ml_features']
+
+        st.subheader("抽出された特徴量")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("1色目の割合", f"{p1:.1f}%")
+        col2.metric("2色目の割合", f"{p2:.1f}%")
+        col3.metric("3色目の割合", f"{p3:.1f}%")
+        st.caption(f"ルールベース参考スコア: {result['score']}点 / 配色タイプ: {result['harmony_label']}")
+
+        st.divider()
+        st.subheader("あなたの採点")
+        my_score = st.slider(
+            "このコーデを0〜100点で採点してください",
+            min_value=0, max_value=100, value=70, step=1
+        )
+        memo = st.text_input("メモ（任意・どんな服か、なぜこの点数かなど）", key="training_memo")
+
+        if st.button("この採点をデータベースに保存する", type="primary"):
+            try:
+                img_bytes = cv2.imencode(
+                    '.jpg', cv2.cvtColor(result['img_rgb'], cv2.COLOR_RGB2BGR)
+                )[1].tobytes()
+                img_name = f"training_{uuid.uuid4()}.jpg"
+                supabase.storage.from_("wardrobe-images").upload(
+                    img_name, img_bytes, {"content-type": "image/jpeg"}
+                )
+                image_url = supabase.storage.from_("wardrobe-images").get_public_url(img_name)
+
+                supabase.table("ml_training_data").insert({
+                    "filename": img_name,
+                    "p1": float(p1), "p2": float(p2), "p3": float(p3),
+                    "hue1": int(hue1), "hue2": int(hue2), "hue3": int(hue3),
+                    "sat1": int(sat1), "sat2": int(sat2), "sat3": int(sat3),
+                    "diff_from_ideal": float(diff),
+                    "my_score": int(my_score),
+                    "image_url": image_url,
+                    "memo": memo or None,
+                }).execute()
+
+                st.success(f"保存しました！（{my_score}点）")
+            except Exception as e:
+                st.error(f"保存エラー: {e}")
+
+    st.divider()
+    st.subheader("これまでに集めたデータ")
+    try:
+        res = supabase.table("ml_training_data").select("*").order("created_at", desc=True).execute()
+        records = res.data
+    except Exception as e:
+        st.error(f"取得エラー: {e}")
+        return
+
+    if not records:
+        st.info("まだ学習データがありません。上から画像をアップロードして採点してください。")
+        return
+
+    st.caption(f"現在 {len(records)} 件のデータがあります（機械学習には最低20〜30件が目安です）")
+
+    cols = st.columns(4)
+    for i, rec in enumerate(records):
+        with cols[i % 4]:
+            if rec.get("image_url"):
+                st.image(rec["image_url"], use_container_width=True)
+            st.markdown(f"**{rec.get('my_score', '-')}点**")
+            if rec.get("memo"):
+                st.caption(rec["memo"])
+            if st.button("削除", key=f"del_train_{rec['id']}"):
+                try:
+                    supabase.table("ml_training_data").delete().eq("id", rec['id']).execute()
+                    st.success("削除しました")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"削除エラー: {e}")
+
+
 def main():
     st.set_page_config(page_title="コーデ色バランス診断", page_icon="👗")
     ml_model = load_ml_model()
-    page = st.sidebar.radio("メニュー", ["診断する", "コーデ履歴", "服を登録", "服一覧"])
+    page = st.sidebar.radio(
+        "メニュー",
+        ["診断する", "コーデ履歴", "服を登録", "服一覧", "学習データ収集"]
+    )
     if ml_model is None:
         st.sidebar.caption("⚠ 学習済みモデル未検出。ルールベースのスコアで動作中です。")
     else:
@@ -685,6 +790,8 @@ def main():
         page_history()
     elif page == "服を登録":
         page_clothes_register()
+    elif page == "学習データ収集":
+        page_training_data()
     else:
         page_clothes_list()
 
