@@ -718,9 +718,17 @@ def page_training_data():
         st.caption(f"ルールベース参考スコア: {result['score']}点 / 配色タイプ: {result['harmony_label']}")
 
         st.divider()
+        st.subheader("採点の前に：基準を確認")
+        st.info(
+            "採点のたびにブレないよう、必ずこの基準を思い出してから点数をつけてください。\n\n"
+            "**10点の例**：色がバラバラで統一感がなく、差し色も意味なく散らばっている\n\n"
+            "**50点の例**：ベースは決まっているが、割合や差し色のバランスが今ひとつ\n\n"
+            "**90点の例**：ベースカラーがしっかり7割前後を占め、差し色が1点だけ効いている"
+        )
+
         st.subheader("あなたの採点")
         my_score = st.slider(
-            "このコーデを0〜100点で採点してください",
+            "このコーデを0〜100点で採点してください（↑の基準を参考に）",
             min_value=0, max_value=100, value=70, step=1
         )
         memo = st.text_input("メモ（任意・どんな服か、なぜこの点数かなど）", key="training_memo")
